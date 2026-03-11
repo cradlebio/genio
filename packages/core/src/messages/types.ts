@@ -10,6 +10,7 @@
 
 import type {
 	GitHubPlatformRef,
+	GitLabPlatformRef,
 	LinearPlatformRef,
 	SlackPlatformRef,
 } from "./platform-refs.js";
@@ -32,7 +33,7 @@ export type MessageAction =
 /**
  * Platform source identifier.
  */
-export type MessageSource = "linear" | "github" | "slack";
+export type MessageSource = "linear" | "github" | "gitlab" | "slack";
 
 // ============================================================================
 // AUTHOR TYPES
@@ -151,6 +152,24 @@ export interface SlackSessionStartPlatformData {
 }
 
 /**
+ * GitLab-specific platform data for session start.
+ */
+export interface GitLabSessionStartPlatformData {
+	/** The event type that triggered this session */
+	eventType: "Note Hook" | "Issue Hook" | "Merge Request Hook";
+	/** Project information */
+	project: GitLabPlatformRef["project"];
+	/** Issue information (if applicable) */
+	issue?: GitLabPlatformRef["issue"];
+	/** Merge request information (if applicable) */
+	mergeRequest?: GitLabPlatformRef["mergeRequest"];
+	/** The note that triggered this session (if applicable) */
+	note?: GitLabPlatformRef["note"];
+	/** GitLab API token for API access */
+	gitlabApiToken?: string;
+}
+
+/**
  * Session start message - initiates a new agent session.
  * Triggered by: Linear delegation, PR mention, thread start, etc.
  */
@@ -168,7 +187,8 @@ export interface SessionStartMessage extends InternalMessageBase {
 	platformData:
 		| LinearSessionStartPlatformData
 		| GitHubSessionStartPlatformData
-		| SlackSessionStartPlatformData;
+		| SlackSessionStartPlatformData
+		| GitLabSessionStartPlatformData;
 }
 
 // ============================================================================
@@ -217,6 +237,20 @@ export interface SlackUserPromptPlatformData {
 }
 
 /**
+ * GitLab-specific platform data for user prompt.
+ */
+export interface GitLabUserPromptPlatformData {
+	/** The event type */
+	eventType: "Note Hook";
+	/** Project information */
+	project: GitLabPlatformRef["project"];
+	/** The note containing the prompt */
+	note?: GitLabPlatformRef["note"];
+	/** GitLab API token for API access */
+	gitlabApiToken?: string;
+}
+
+/**
  * User prompt message - a user message during an active session.
  * Triggered by: Mid-session comments, follow-up questions, etc.
  */
@@ -228,7 +262,8 @@ export interface UserPromptMessage extends InternalMessageBase {
 	platformData:
 		| LinearUserPromptPlatformData
 		| GitHubUserPromptPlatformData
-		| SlackUserPromptPlatformData;
+		| SlackUserPromptPlatformData
+		| GitLabUserPromptPlatformData;
 }
 
 // ============================================================================
@@ -288,6 +323,22 @@ export interface LinearContentUpdatePlatformData {
 }
 
 /**
+ * GitLab-specific platform data for content update.
+ */
+export interface GitLabContentUpdatePlatformData {
+	/** The event type that triggered this update */
+	eventType: "Issue Hook" | "Merge Request Hook";
+	/** Project information */
+	project: GitLabPlatformRef["project"];
+	/** Issue information (if applicable) */
+	issue?: GitLabPlatformRef["issue"];
+	/** Merge request information (if applicable) */
+	mergeRequest?: GitLabPlatformRef["mergeRequest"];
+	/** Previous attribute values from changes */
+	previousAttributes?: Record<string, unknown>;
+}
+
+/**
  * Content update message - work item content was modified.
  * Triggered by: Issue title/description edit, PR body edit, etc.
  */
@@ -296,7 +347,9 @@ export interface ContentUpdateMessage extends InternalMessageBase {
 	/** What changed */
 	changes: ContentChanges;
 	/** Platform-specific data */
-	platformData: LinearContentUpdatePlatformData;
+	platformData:
+		| LinearContentUpdatePlatformData
+		| GitLabContentUpdatePlatformData;
 }
 
 // ============================================================================
@@ -314,13 +367,27 @@ export interface LinearUnassignPlatformData {
 }
 
 /**
+ * GitLab-specific platform data for unassign.
+ */
+export interface GitLabUnassignPlatformData {
+	/** The event type */
+	eventType: "Issue Hook" | "Merge Request Hook";
+	/** Project information */
+	project: GitLabPlatformRef["project"];
+	/** Issue information (if applicable) */
+	issue?: GitLabPlatformRef["issue"];
+	/** Merge request information (if applicable) */
+	mergeRequest?: GitLabPlatformRef["mergeRequest"];
+}
+
+/**
  * Unassign message - work item was unassigned from the agent.
  * Triggered by: User unassigns issue, removes agent from PR, etc.
  */
 export interface UnassignMessage extends InternalMessageBase {
 	action: "unassign";
 	/** Platform-specific data */
-	platformData: LinearUnassignPlatformData;
+	platformData: LinearUnassignPlatformData | GitLabUnassignPlatformData;
 }
 
 // ============================================================================

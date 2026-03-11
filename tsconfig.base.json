@@ -32,6 +32,7 @@
 			"cyrus-mcp-tools": ["packages/mcp-tools"],
 			"cyrus-simple-agent-runner": ["packages/simple-agent-runner"],
 			"cyrus-config-updater": ["packages/config-updater"],
+			"cyrus-gitlab-event-transport": ["packages/gitlab-event-transport"],
 			"cyrus-linear-event-transport": ["packages/linear-event-transport"]
 		}
 	},

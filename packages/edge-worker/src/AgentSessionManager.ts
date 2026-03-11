@@ -161,7 +161,7 @@ export class AgentSessionManager extends EventEmitter {
 		issueId: string,
 		issueMinimal: IssueMinimal,
 		workspace: Workspace,
-		platform: "linear" | "github" | "slack" = "linear",
+		platform: "linear" | "github" | "gitlab" | "slack" = "linear",
 	): CyrusAgentSession {
 		const log = this.logger.withContext({
 			sessionId,

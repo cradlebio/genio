@@ -212,6 +212,127 @@ export interface GitHubPlatformRef {
 }
 
 // ============================================================================
+// GITLAB PLATFORM REFERENCES
+// ============================================================================
+
+/**
+ * GitLab platform reference types.
+ * These map to GitLab webhook payload structures.
+ */
+export interface GitLabPlatformRef {
+	/** Project data from webhook */
+	project: {
+		/** Project ID */
+		id: number;
+		/** Project name */
+		name: string;
+		/** Full project path (group/project) */
+		pathWithNamespace: string;
+		/** Project web URL */
+		webUrl: string;
+		/** HTTP clone URL */
+		httpUrl: string;
+		/** SSH clone URL */
+		sshUrl: string;
+		/** Default branch */
+		defaultBranch: string;
+		/** Namespace info */
+		namespace: {
+			name: string;
+			path: string;
+			id: number;
+		};
+	};
+
+	/** Issue data from webhook */
+	issue: {
+		/** Global ID */
+		id: number;
+		/** Project-scoped ID (shown in UI) */
+		iid: number;
+		/** Issue title */
+		title: string;
+		/** Issue description */
+		description: string | null;
+		/** Issue state */
+		state: string;
+		/** Issue web URL */
+		url: string;
+		/** Action that triggered the webhook */
+		action?: string;
+		/** Assigned users */
+		assignees: Array<{
+			id: number;
+			username: string;
+			name: string;
+		}>;
+		/** Labels */
+		labels: Array<{
+			id: number;
+			title: string;
+		}>;
+	};
+
+	/** Merge request data from webhook */
+	mergeRequest: {
+		/** Global ID */
+		id: number;
+		/** Project-scoped ID (shown in UI) */
+		iid: number;
+		/** MR title */
+		title: string;
+		/** MR description */
+		description: string | null;
+		/** MR state */
+		state: string;
+		/** MR web URL */
+		url: string;
+		/** Action that triggered the webhook */
+		action?: string;
+		/** Source branch */
+		sourceBranch: string;
+		/** Target branch */
+		targetBranch: string;
+		/** Last commit SHA */
+		lastCommitSha: string;
+		/** Assigned users */
+		assignees: Array<{
+			id: number;
+			username: string;
+			name: string;
+		}>;
+		/** MR author */
+		author: {
+			id: number;
+			username: string;
+			name: string;
+		};
+	};
+
+	/** Note (comment) data from webhook */
+	note: {
+		/** Note ID */
+		id: number;
+		/** Note body (markdown) */
+		body: string;
+		/** Type of object the note is on */
+		noteableType: string;
+		/** IID of the noteable object */
+		noteableIid: number;
+		/** Note web URL */
+		url: string;
+		/** Note author */
+		author: {
+			id: number;
+			username: string;
+			name: string;
+		};
+		/** Creation timestamp */
+		createdAt: string;
+	};
+}
+
+// ============================================================================
 // SLACK PLATFORM REFERENCES (Future)
 // ============================================================================
 
