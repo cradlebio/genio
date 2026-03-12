@@ -13,6 +13,8 @@ import { BaseCommand } from "./ICommand.js";
 export class SelfAuthCommand extends BaseCommand {
 	private server: FastifyInstance | null = null;
 	private callbackPort = parseInt(process.env.CYRUS_SERVER_PORT || "3456", 10);
+	private callbackHost = process.env.CYRUS_HOST_EXTERNAL?.toLowerCase().trim() === "true" ? "0.0.0.0" : "localhost";
+
 
 	async execute(_args: string[]): Promise<void> {
 		console.log("\nCyrus Linear Self-Authentication");
@@ -156,10 +158,10 @@ export class SelfAuthCommand extends BaseCommand {
 			});
 
 			this.server
-				.listen({ port: this.callbackPort, host: "localhost" })
+				.listen({ port: this.callbackPort, host: this.callbackHost })
 				.then(() => {
 					console.log(
-						`Waiting for authorization on port ${this.callbackPort}...`,
+						`Waiting for authorization on ${this.callbackHost}:${this.callbackPort}...`,
 					);
 					console.log();
 					console.log("Opening browser for Linear authorization...");
