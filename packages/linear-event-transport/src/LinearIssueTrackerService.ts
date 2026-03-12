@@ -77,6 +77,7 @@ import { LinearEventTransport } from "./LinearEventTransport.js";
 export class LinearIssueTrackerService implements IIssueTrackerService {
 	private readonly linearClient: LinearClient;
 	private oauthConfig?: LinearOAuthConfig;
+	private onTokenExpired?: () => Promise<string>;
 	private logger: ILogger;
 
 	/**
@@ -97,14 +98,17 @@ export class LinearIssueTrackerService implements IIssueTrackerService {
 	 * @param linearClient - Configured LinearClient instance
 	 * @param oauthConfig - Optional OAuth config for automatic token refresh on 401 errors
 	 * @param logger - Optional logger instance
+	 * @param onTokenExpired - Optional callback for 401 handling when oauthConfig is not set (e.g., M2M client credentials mode)
 	 */
 	constructor(
 		linearClient: LinearClient,
 		oauthConfig?: LinearOAuthConfig,
 		logger?: ILogger,
+		onTokenExpired?: () => Promise<string>,
 	) {
 		this.linearClient = linearClient;
 		this.oauthConfig = oauthConfig;
+		this.onTokenExpired = onTokenExpired;
 		this.logger =
 			logger ?? createLogger({ component: "LinearIssueTrackerService" });
 
@@ -116,9 +120,14 @@ export class LinearIssueTrackerService implements IIssueTrackerService {
 			);
 		}
 
-		// Only patch if oauthConfig is provided AND linearClient.client exists
+		// Determine which 401 recovery strategy to use:
+		// 1. oauthConfig: use refresh_token grant (existing flow)
+		// 2. onTokenExpired: use external callback (e.g., client credentials re-acquisition)
+		const has401Handler = oauthConfig || onTokenExpired;
+
+		// Only patch if a 401 handler is available AND linearClient.client exists
 		// (the .client property may not exist in test mocks)
-		if (oauthConfig && linearClient.client) {
+		if (has401Handler && linearClient.client) {
 			const client = linearClient.client;
 			const originalRequest = client.request.bind(client);
 
@@ -148,7 +157,11 @@ export class LinearIssueTrackerService implements IIssueTrackerService {
 					// The promise persists after resolution so late-arriving 401s still get
 					// the same token without triggering a new refresh.
 					if (!refreshPromise) {
-						refreshPromise = this.doTokenRefresh().catch((refreshError) => {
+						const refreshFn = oauthConfig
+							? () => this.doTokenRefresh()
+							: () => this.onTokenExpired!();
+
+						refreshPromise = refreshFn().catch((refreshError) => {
 							// On failure, clear the promise so next 401 can retry fresh
 							refreshPromise = null;
 							this.logger.error("Token refresh failed:", refreshError);

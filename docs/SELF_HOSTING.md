@@ -173,9 +173,14 @@ LINEAR_WEBHOOK_SECRET=your_webhook_secret
 ANTHROPIC_API_KEY=your-api-key
 # or: CLAUDE_CODE_OAUTH_TOKEN=your-oauth-token
 
+# Optional: Machine-to-machine auth (skips browser OAuth)
+# CYRUS_USE_LINEAR_M2M_TOKEN=true
+
 # Optional: Cloudflare Tunnel
 # CLOUDFLARE_TOKEN=your-cloudflare-token
 ```
+
+> **Headless/CI deployments:** If you cannot open a browser for OAuth (e.g., Docker, systemd, cloud VMs), set `CYRUS_USE_LINEAR_M2M_TOKEN=true`. This uses Linear's client credentials flow to acquire tokens automatically on startup — no browser needed. Requires `LINEAR_CLIENT_ID` and `LINEAR_CLIENT_SECRET` to be set. The token is renewed automatically before expiry.
 
 ---
 
