@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
 	mockWriteFileSync: vi.fn(),
 	mockQuestion: vi.fn(),
 	mockClose: vi.fn(),
+	mockFetch: vi.fn(),
 }));
 
 // Mock modules
@@ -36,6 +37,23 @@ vi.mock("node:readline", () => ({
 		close: mocks.mockClose,
 	})),
 }));
+
+const mockLinearClient = {
+	viewer: Promise.resolve({
+		organization: Promise.resolve({
+			id: "workspace-123",
+			name: "Test Workspace",
+		}),
+	}),
+};
+
+vi.mock("@linear/sdk", async (importOriginal) => {
+	const actual = await importOriginal();
+	return {
+		...(actual as object),
+		LinearClient: vi.fn(() => mockLinearClient),
+	};
+});
 
 // Mock process.exit
 const mockExit = vi.spyOn(process, "exit").mockImplementation(() => {
@@ -76,6 +94,7 @@ describe("SelfAddRepoCommand", () => {
 		mocks.mockRandomUUID.mockReturnValue("generated-uuid-123");
 		mocks.mockExistsSync.mockReturnValue(false);
 		mocks.mockExecSync.mockReturnValue("");
+		global.fetch = mocks.mockFetch as any;
 	});
 
 	describe("Config File Validation", () => {
@@ -572,6 +591,7 @@ describe("SelfAddRepoCommand", () => {
 				linearToken: "existing-token",
 				linearRefreshToken: "existing-refresh",
 				isActive: true,
+				githubUrl: "https://github.com/user/new-repo",
 			});
 		});
 
@@ -620,6 +640,115 @@ describe("SelfAddRepoCommand", () => {
 		});
 	});
 
+	describe("VCS URL Detection", () => {
+		const setupConfigWithWorkspace = () => {
+			mocks.mockReadFileSync.mockReturnValue(
+				JSON.stringify({
+					repositories: [
+						{
+							linearWorkspaceId: "ws-123",
+							linearWorkspaceName: "Test Workspace",
+							linearToken: "token",
+							linearRefreshToken: "refresh",
+						},
+					],
+				}),
+			);
+		};
+
+		it("should set githubUrl for GitHub URLs", async () => {
+			setupConfigWithWorkspace();
+
+			await expect(
+				command.execute(["https://github.com/org/repo.git"]),
+			).rejects.toThrow("process.exit called");
+			expect(mockExit).toHaveBeenCalledWith(0);
+
+			const writtenConfig = JSON.parse(
+				mocks.mockWriteFileSync.mock.calls[0][1],
+			);
+			const addedRepo = writtenConfig.repositories.find(
+				(r: any) => r.id === "generated-uuid-123",
+			);
+			expect(addedRepo.githubUrl).toBe("https://github.com/org/repo");
+			expect(addedRepo.gitlabUrl).toBeUndefined();
+		});
+
+		it("should set gitlabUrl for GitLab URLs", async () => {
+			setupConfigWithWorkspace();
+
+			await expect(
+				command.execute(["https://gitlab.com/cradlebio/studio/web.git"]),
+			).rejects.toThrow("process.exit called");
+			expect(mockExit).toHaveBeenCalledWith(0);
+
+			const writtenConfig = JSON.parse(
+				mocks.mockWriteFileSync.mock.calls[0][1],
+			);
+			const addedRepo = writtenConfig.repositories.find(
+				(r: any) => r.id === "generated-uuid-123",
+			);
+			expect(addedRepo.gitlabUrl).toBe(
+				"https://gitlab.com/cradlebio/studio/web",
+			);
+			expect(addedRepo.githubUrl).toBeUndefined();
+		});
+
+		it("should set neither field for non-GitHub/GitLab URLs", async () => {
+			setupConfigWithWorkspace();
+
+			await expect(
+				command.execute(["https://bitbucket.org/org/repo.git"]),
+			).rejects.toThrow("process.exit called");
+			expect(mockExit).toHaveBeenCalledWith(0);
+
+			const writtenConfig = JSON.parse(
+				mocks.mockWriteFileSync.mock.calls[0][1],
+			);
+			const addedRepo = writtenConfig.repositories.find(
+				(r: any) => r.id === "generated-uuid-123",
+			);
+			expect(addedRepo.githubUrl).toBeUndefined();
+			expect(addedRepo.gitlabUrl).toBeUndefined();
+		});
+
+		it("should strip .git suffix from VCS URL", async () => {
+			setupConfigWithWorkspace();
+
+			await expect(
+				command.execute(["https://github.com/org/repo.git"]),
+			).rejects.toThrow("process.exit called");
+			expect(mockExit).toHaveBeenCalledWith(0);
+
+			const writtenConfig = JSON.parse(
+				mocks.mockWriteFileSync.mock.calls[0][1],
+			);
+			const addedRepo = writtenConfig.repositories.find(
+				(r: any) => r.id === "generated-uuid-123",
+			);
+			expect(addedRepo.githubUrl).toBe("https://github.com/org/repo");
+		});
+
+		it("should handle self-hosted GitLab URLs", async () => {
+			setupConfigWithWorkspace();
+
+			await expect(
+				command.execute(["https://gitlab.internal.co/team/project.git"]),
+			).rejects.toThrow("process.exit called");
+			expect(mockExit).toHaveBeenCalledWith(0);
+
+			const writtenConfig = JSON.parse(
+				mocks.mockWriteFileSync.mock.calls[0][1],
+			);
+			const addedRepo = writtenConfig.repositories.find(
+				(r: any) => r.id === "generated-uuid-123",
+			);
+			expect(addedRepo.gitlabUrl).toBe(
+				"https://gitlab.internal.co/team/project",
+			);
+		});
+	});
+
 	describe("Output Messages", () => {
 		it("should log success with repo details", async () => {
 			mocks.mockReadFileSync.mockReturnValue(
@@ -649,6 +778,171 @@ describe("SelfAddRepoCommand", () => {
 			expect(mockConsoleLog).toHaveBeenCalledWith(
 				expect.stringContaining("Workspace: My Workspace"),
 			);
+		});
+	});
+
+	describe("M2M Mode", () => {
+		let originalEnv: NodeJS.ProcessEnv;
+
+		beforeEach(() => {
+			originalEnv = { ...process.env };
+			process.env.CYRUS_USE_LINEAR_M2M_TOKEN = "true";
+		});
+
+		afterEach(() => {
+			process.env = originalEnv;
+		});
+
+		it("should acquire M2M token when existing repos have linearWorkspaceId but no linearToken", async () => {
+			process.env.LINEAR_CLIENT_ID = "test-client-id";
+			process.env.LINEAR_CLIENT_SECRET = "test-secret";
+
+			mocks.mockReadFileSync.mockReturnValue(
+				JSON.stringify({
+					repositories: [
+						{
+							id: "existing",
+							name: "existing-repo",
+							linearWorkspaceId: "ws-123",
+							linearWorkspaceName: "My Workspace",
+							linearToken: "",
+						},
+					],
+				}),
+			);
+
+			mocks.mockFetch.mockResolvedValueOnce({
+				ok: true,
+				json: () =>
+					Promise.resolve({
+						access_token: "lin_api_m2m_token",
+						token_type: "Bearer",
+						expires_in: 864000,
+						scope: "write",
+					}),
+			});
+
+			await expect(
+				command.execute(["https://github.com/user/new-repo.git"]),
+			).rejects.toThrow("process.exit called");
+			expect(mockExit).toHaveBeenCalledWith(0);
+
+			const writtenConfig = JSON.parse(
+				mocks.mockWriteFileSync.mock.calls[0][1],
+			);
+			const addedRepo = writtenConfig.repositories.find(
+				(r: any) => r.id === "generated-uuid-123",
+			);
+			expect(addedRepo.linearWorkspaceId).toBe("workspace-123");
+			expect(addedRepo.linearToken).toBe("lin_api_m2m_token");
+		});
+
+		it("should acquire M2M token when no repos exist", async () => {
+			process.env.LINEAR_CLIENT_ID = "test-client-id";
+			process.env.LINEAR_CLIENT_SECRET = "test-secret";
+
+			mocks.mockReadFileSync.mockReturnValue(
+				JSON.stringify({ repositories: [] }),
+			);
+
+			mocks.mockFetch.mockResolvedValueOnce({
+				ok: true,
+				json: () =>
+					Promise.resolve({
+						access_token: "lin_api_m2m_token",
+						token_type: "Bearer",
+						expires_in: 864000,
+						scope: "write",
+					}),
+			});
+
+			await expect(
+				command.execute(["https://github.com/user/new-repo.git"]),
+			).rejects.toThrow("process.exit called");
+			expect(mockExit).toHaveBeenCalledWith(0);
+
+			const writtenConfig = JSON.parse(
+				mocks.mockWriteFileSync.mock.calls[0][1],
+			);
+			const addedRepo = writtenConfig.repositories.find(
+				(r: any) => r.id === "generated-uuid-123",
+			);
+			expect(addedRepo.linearToken).toBe("lin_api_m2m_token");
+		});
+
+		it("should error when no repos and no LINEAR_CLIENT_ID/SECRET", async () => {
+			delete process.env.LINEAR_CLIENT_ID;
+			delete process.env.LINEAR_CLIENT_SECRET;
+
+			mocks.mockReadFileSync.mockReturnValue(
+				JSON.stringify({ repositories: [] }),
+			);
+
+			await expect(
+				command.execute(["https://github.com/user/new-repo.git"]),
+			).rejects.toThrow("process.exit called");
+			expect(mockExit).toHaveBeenCalledWith(1);
+			expect(mockApp.logger.error).toHaveBeenCalledWith(
+				expect.stringContaining("No Linear credentials found"),
+			);
+		});
+
+		it("should store the workspace token in the new repo entry", async () => {
+			mocks.mockReadFileSync.mockReturnValue(
+				JSON.stringify({
+					repositories: [
+						{
+							id: "existing",
+							name: "existing-repo",
+							linearWorkspaceId: "ws-123",
+							linearWorkspaceName: "My Workspace",
+							linearToken: "some-token",
+						},
+					],
+				}),
+			);
+
+			await expect(
+				command.execute(["https://github.com/user/new-repo.git"]),
+			).rejects.toThrow("process.exit called");
+			expect(mockExit).toHaveBeenCalledWith(0);
+
+			const writtenConfig = JSON.parse(
+				mocks.mockWriteFileSync.mock.calls[0][1],
+			);
+			const addedRepo = writtenConfig.repositories.find(
+				(r: any) => r.id === "generated-uuid-123",
+			);
+			expect(addedRepo.linearToken).toBe("some-token");
+		});
+
+		it("should use token from existing repo with credentials", async () => {
+			mocks.mockReadFileSync.mockReturnValue(
+				JSON.stringify({
+					repositories: [
+						{
+							id: "repo-1",
+							name: "other",
+							linearWorkspaceId: "ws-123",
+							linearWorkspaceName: "Workspace",
+							linearToken: "m2m-token",
+						},
+					],
+				}),
+			);
+
+			await expect(
+				command.execute(["https://github.com/user/new-repo.git"]),
+			).rejects.toThrow("process.exit called");
+			expect(mockExit).toHaveBeenCalledWith(0);
+
+			const writtenConfig = JSON.parse(
+				mocks.mockWriteFileSync.mock.calls[0][1],
+			);
+			const addedRepo = writtenConfig.repositories.find(
+				(r: any) => r.id === "generated-uuid-123",
+			);
+			expect(addedRepo.linearToken).toBe("m2m-token");
 		});
 	});
 });

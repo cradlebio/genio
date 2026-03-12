@@ -141,7 +141,7 @@ export const RepositoryConfigSchema = z.object({
 	// Linear configuration
 	linearWorkspaceId: z.string(),
 	linearWorkspaceName: z.string().optional(),
-	linearToken: z.string(),
+	linearToken: z.string().default(""),
 	linearRefreshToken: z.string().optional(),
 	teamKeys: z.array(z.string()).optional(),
 	routingLabels: z.array(z.string()).optional(),

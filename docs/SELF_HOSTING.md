@@ -188,6 +188,8 @@ ANTHROPIC_API_KEY=your-api-key
 
 ### 5.1 Authorize with Linear
 
+**Option A: Browser OAuth** (interactive)
+
 ```bash
 cyrus self-auth
 ```
@@ -197,13 +199,23 @@ This will:
 2. Open your browser to Linear's OAuth authorization page
 3. After you click **Authorize**, redirect back and save the tokens to your config
 
+**Option B: M2M / Headless** (no browser needed)
+
+Set `CYRUS_USE_LINEAR_M2M_TOKEN=true` in your environment, then run:
+
+```bash
+cyrus self-auth
+```
+
+When this env var is set, `self-auth` automatically uses client credentials (`LINEAR_CLIENT_ID` + `LINEAR_CLIENT_SECRET`) instead of browser OAuth. Ideal for Docker, systemd, and cloud VMs. Does not require `CYRUS_BASE_URL`.
+
 ### 5.2 Add a Repository
 
 ```bash
 cyrus self-add-repo https://github.com/yourorg/yourrepo.git
 ```
 
-This clones the repository to `~/.cyrus/repos/` and configures it with your Linear workspace credentials.
+This clones the repository to `~/.cyrus/repos/` and configures it with your Linear workspace credentials. The `githubUrl` or `gitlabUrl` field is automatically set based on the clone URL, enabling webhook routing for GitHub and GitLab events.
 
 For multiple workspaces, specify which one:
 ```bash
