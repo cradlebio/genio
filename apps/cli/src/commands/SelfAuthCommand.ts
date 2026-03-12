@@ -15,6 +15,80 @@ export class SelfAuthCommand extends BaseCommand {
 	private callbackPort = parseInt(process.env.CYRUS_SERVER_PORT || "3456", 10);
 
 	async execute(_args: string[]): Promise<void> {
+		const isM2M =
+			process.env.CYRUS_USE_LINEAR_M2M_TOKEN?.toLowerCase() === "true";
+
+		if (isM2M) {
+			return this.executeM2M();
+		}
+
+		return this.executeOAuth();
+	}
+
+	private async executeM2M(): Promise<void> {
+		console.log("\nCyrus Linear M2M Authentication");
+		this.logDivider();
+
+		const clientId = process.env.LINEAR_CLIENT_ID;
+		const clientSecret = process.env.LINEAR_CLIENT_SECRET;
+
+		if (!clientId || !clientSecret) {
+			this.logError("Missing required environment variables:");
+			if (!clientId) console.log("   - LINEAR_CLIENT_ID");
+			if (!clientSecret) console.log("   - LINEAR_CLIENT_SECRET");
+			console.log("\nSet these in your shell profile (.zshrc):");
+			console.log("  export LINEAR_CLIENT_ID='your-client-id'");
+			console.log("  export LINEAR_CLIENT_SECRET='your-client-secret'");
+			process.exit(1);
+		}
+
+		const configPath = resolve(this.app.cyrusHome, DEFAULT_CONFIG_FILENAME);
+		let config: EdgeConfig;
+		try {
+			config = JSON.parse(readFileSync(configPath, "utf-8")) as EdgeConfig;
+		} catch {
+			this.logError(`Config file not found: ${configPath}`);
+			console.log("Run 'cyrus' first to create initial configuration.");
+			process.exit(1);
+		}
+
+		console.log("Configuration:");
+		console.log(`   Client ID: ${clientId.substring(0, 20)}...`);
+		console.log(`   Config: ${configPath}`);
+		console.log();
+
+		try {
+			console.log("Acquiring M2M token via client credentials...");
+			const tokens = await this.acquireM2MToken(clientId, clientSecret);
+			this.logSuccess(
+				`Got access token: ${tokens.accessToken.substring(0, 30)}...`,
+			);
+
+			console.log("Fetching workspace info...");
+			const workspace = await this.fetchWorkspaceInfo(tokens.accessToken);
+			this.logSuccess(`Workspace: ${workspace.name} (${workspace.id})`);
+
+			console.log("Saving tokens to config.json...");
+			this.overwriteRepoConfigTokens(config, configPath, tokens, workspace);
+
+			const updatedCount = config.repositories.filter(
+				(r: EdgeConfig["repositories"][number]) =>
+					r.linearWorkspaceId === workspace.id,
+			).length;
+			this.logSuccess(`Updated ${updatedCount} repository/repositories`);
+
+			console.log();
+			this.logSuccess(
+				"M2M authentication complete! Restart cyrus to use the new tokens.",
+			);
+			process.exit(0);
+		} catch (error) {
+			this.logError(`Authentication failed: ${(error as Error).message}`);
+			process.exit(1);
+		}
+	}
+
+	private async executeOAuth(): Promise<void> {
 		console.log("\nCyrus Linear Self-Authentication");
 		this.logDivider();
 
@@ -176,6 +250,44 @@ export class SelfAuthCommand extends BaseCommand {
 					reject(new Error(`Server error: ${err.message}`));
 				});
 		});
+	}
+
+	private async acquireM2MToken(
+		clientId: string,
+		clientSecret: string,
+	): Promise<{ accessToken: string; refreshToken?: string }> {
+		const response = await fetch("https://api.linear.app/oauth/token", {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/x-www-form-urlencoded",
+			},
+			body: new URLSearchParams({
+				client_id: clientId,
+				client_secret: clientSecret,
+				grant_type: "client_credentials",
+				scope: "read,write,app:assignable,app:mentionable",
+			}).toString(),
+		});
+
+		if (!response.ok) {
+			const errorText = await response.text();
+			throw new Error(`M2M token acquisition failed: ${errorText}`);
+		}
+
+		const data = (await response.json()) as {
+			access_token: string;
+			token_type: string;
+			expires_in: number;
+			scope: string;
+		};
+
+		if (!data.access_token) {
+			throw new Error("No access_token in client credentials response");
+		}
+
+		return {
+			accessToken: data.access_token,
+		};
 	}
 
 	private async exchangeCodeForTokens(

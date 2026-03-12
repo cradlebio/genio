@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import * as readline from "node:readline";
+import { LinearClient } from "@linear/sdk";
 import {
 	DEFAULT_BASE_BRANCH,
 	DEFAULT_CONFIG_FILENAME,
@@ -46,6 +47,209 @@ export class SelfAddRepoCommand extends BaseCommand {
 		return new Promise((resolve) => {
 			this.getReadline().question(question, (answer) => resolve(answer.trim()));
 		});
+	}
+
+	private async acquireM2MToken(
+		clientId: string,
+		clientSecret: string,
+	): Promise<string> {
+		const response = await fetch("https://api.linear.app/oauth/token", {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/x-www-form-urlencoded",
+			},
+			body: new URLSearchParams({
+				client_id: clientId,
+				client_secret: clientSecret,
+				grant_type: "client_credentials",
+				scope: "read,write,app:assignable,app:mentionable",
+			}).toString(),
+		});
+
+		if (!response.ok) {
+			const errorText = await response.text();
+			throw new Error(`M2M token acquisition failed: ${errorText}`);
+		}
+
+		const data = (await response.json()) as {
+			access_token: string;
+			token_type: string;
+			expires_in: number;
+			scope: string;
+		};
+
+		if (!data.access_token) {
+			throw new Error("No access_token in client credentials response");
+		}
+
+		return data.access_token;
+	}
+
+	private async fetchWorkspaceInfo(
+		accessToken: string,
+	): Promise<{ id: string; name: string }> {
+		const linearClient = new LinearClient({ accessToken });
+		const viewer = await linearClient.viewer;
+		const organization = await viewer.organization;
+
+		if (!organization?.id) {
+			throw new Error("Failed to get workspace info from Linear");
+		}
+
+		return { id: organization.id, name: organization.name || organization.id };
+	}
+
+	private async resolveM2MWorkspace(
+		config: EdgeConfig,
+		workspaceName?: string,
+	): Promise<WorkspaceCredentials> {
+		// In M2M mode, scan existing repos for workspace info with tokens
+		const workspaces = new Map<string, WorkspaceCredentials>();
+		for (const repo of config.repositories) {
+			if (
+				repo.linearWorkspaceId &&
+				repo.linearToken &&
+				!workspaces.has(repo.linearWorkspaceId)
+			) {
+				workspaces.set(repo.linearWorkspaceId, {
+					id: repo.linearWorkspaceId,
+					name: repo.linearWorkspaceName || repo.linearWorkspaceId,
+					token: repo.linearToken,
+				});
+			}
+		}
+
+		// If no existing credentials, acquire an M2M token (same as self-auth --m2m)
+		if (workspaces.size === 0) {
+			const clientId = process.env.LINEAR_CLIENT_ID;
+			const clientSecret = process.env.LINEAR_CLIENT_SECRET;
+
+			if (!clientId || !clientSecret) {
+				this.logError(
+					"No Linear credentials found and cannot acquire M2M token.",
+				);
+				console.log("Either:");
+				console.log("  1. Run 'cyrus self-auth' first, or");
+				console.log(
+					"  2. Set LINEAR_CLIENT_ID and LINEAR_CLIENT_SECRET environment variables",
+				);
+				process.exit(1);
+			}
+
+			console.log("No existing credentials found. Acquiring M2M token...");
+			const accessToken = await this.acquireM2MToken(clientId, clientSecret);
+			const workspace = await this.fetchWorkspaceInfo(accessToken);
+			console.log(`  Workspace: ${workspace.name} (${workspace.id})`);
+
+			return {
+				id: workspace.id,
+				name: workspace.name,
+				token: accessToken,
+			};
+		}
+
+		const workspaceList = Array.from(workspaces.values());
+
+		if (workspaceList.length === 1) {
+			return workspaceList[0]!;
+		}
+
+		if (workspaceName) {
+			const found = workspaceList.find((w) => w.name === workspaceName);
+			if (!found) {
+				this.logError(`Workspace '${workspaceName}' not found`);
+				process.exit(1);
+			}
+			return found;
+		}
+
+		console.log("\nAvailable workspaces:");
+		workspaceList.forEach((w, i) => {
+			console.log(`  ${i + 1}. ${w.name}`);
+		});
+		const choice = await this.prompt(
+			`Select workspace [1-${workspaceList.length}]: `,
+		);
+		const idx = parseInt(choice, 10) - 1;
+		if (idx < 0 || idx >= workspaceList.length) {
+			this.logError("Invalid selection");
+			process.exit(1);
+		}
+		return workspaceList[idx]!;
+	}
+
+	private async resolveOAuthWorkspace(
+		config: EdgeConfig,
+		workspaceName?: string,
+	): Promise<WorkspaceCredentials> {
+		// Find workspaces with Linear credentials
+		const workspaces = new Map<string, WorkspaceCredentials>();
+		for (const repo of config.repositories) {
+			if (
+				repo.linearWorkspaceId &&
+				repo.linearToken &&
+				!workspaces.has(repo.linearWorkspaceId)
+			) {
+				workspaces.set(repo.linearWorkspaceId, {
+					id: repo.linearWorkspaceId,
+					name: repo.linearWorkspaceName || repo.linearWorkspaceId,
+					token: repo.linearToken,
+					refreshToken: repo.linearRefreshToken,
+				});
+			}
+		}
+
+		if (workspaces.size === 0) {
+			this.logError(
+				"No Linear credentials found. Run 'cyrus self-auth' first.",
+			);
+			process.exit(1);
+		}
+
+		const workspaceList = Array.from(workspaces.values());
+
+		if (workspaceList.length === 1) {
+			return workspaceList[0]!;
+		}
+
+		if (workspaceName) {
+			const foundWorkspace = workspaceList.find(
+				(w) => w.name === workspaceName,
+			);
+			if (!foundWorkspace) {
+				this.logError(`Workspace '${workspaceName}' not found`);
+				process.exit(1);
+			}
+			return foundWorkspace;
+		}
+
+		console.log("\nAvailable workspaces:");
+		workspaceList.forEach((w, i) => {
+			console.log(`  ${i + 1}. ${w.name}`);
+		});
+		const choice = await this.prompt(
+			`Select workspace [1-${workspaceList.length}]: `,
+		);
+		const idx = parseInt(choice, 10) - 1;
+		if (idx < 0 || idx >= workspaceList.length) {
+			this.logError("Invalid selection");
+			process.exit(1);
+		}
+		return workspaceList[idx]!;
+	}
+
+	private detectVcsUrl(url: string): {
+		githubUrl?: string;
+		gitlabUrl?: string;
+	} {
+		const normalized = url.replace(/\.git$/, "");
+		if (normalized.includes("github.com")) {
+			return { githubUrl: normalized };
+		}
+		if (normalized.includes("gitlab.com") || normalized.includes("gitlab")) {
+			return { gitlabUrl: normalized };
+		}
+		return {};
 	}
 
 	private cleanup(): void {
@@ -103,61 +307,21 @@ export class SelfAddRepoCommand extends BaseCommand {
 				process.exit(1);
 			}
 
-			// Find workspaces with Linear credentials
-			const workspaces = new Map<string, WorkspaceCredentials>();
-			for (const repo of config.repositories) {
-				if (
-					repo.linearWorkspaceId &&
-					repo.linearToken &&
-					!workspaces.has(repo.linearWorkspaceId)
-				) {
-					workspaces.set(repo.linearWorkspaceId, {
-						id: repo.linearWorkspaceId,
-						name: repo.linearWorkspaceName || repo.linearWorkspaceId,
-						token: repo.linearToken,
-						refreshToken: repo.linearRefreshToken,
-					});
-				}
-			}
+			const isM2M =
+				process.env.CYRUS_USE_LINEAR_M2M_TOKEN?.toLowerCase() === "true";
 
-			if (workspaces.size === 0) {
-				this.logError(
-					"No Linear credentials found. Run 'cyrus self-auth' first.",
-				);
-				process.exit(1);
-			}
-
-			// Get workspace
 			let selectedWorkspace: WorkspaceCredentials;
-			const workspaceList = Array.from(workspaces.values());
 
-			if (workspaceList.length === 1) {
-				// Safe: we checked length === 1 above
-				selectedWorkspace = workspaceList[0]!;
-			} else if (workspaceName) {
-				const foundWorkspace = workspaceList.find(
-					(w) => w.name === workspaceName,
+			if (isM2M) {
+				selectedWorkspace = await this.resolveM2MWorkspace(
+					config,
+					workspaceName,
 				);
-				if (!foundWorkspace) {
-					this.logError(`Workspace '${workspaceName}' not found`);
-					process.exit(1);
-				}
-				selectedWorkspace = foundWorkspace;
 			} else {
-				console.log("\nAvailable workspaces:");
-				workspaceList.forEach((w, i) => {
-					console.log(`  ${i + 1}. ${w.name}`);
-				});
-				const choice = await this.prompt(
-					`Select workspace [1-${workspaceList.length}]: `,
+				selectedWorkspace = await this.resolveOAuthWorkspace(
+					config,
+					workspaceName,
 				);
-				const idx = parseInt(choice, 10) - 1;
-				if (idx < 0 || idx >= workspaceList.length) {
-					this.logError("Invalid selection");
-					process.exit(1);
-				}
-				// Safe: we validated idx is within bounds above
-				selectedWorkspace = workspaceList[idx]!;
 			}
 
 			// Clone the repo
@@ -189,6 +353,7 @@ export class SelfAddRepoCommand extends BaseCommand {
 				linearToken: selectedWorkspace.token,
 				linearRefreshToken: selectedWorkspace.refreshToken,
 				isActive: true,
+				...this.detectVcsUrl(url),
 			});
 
 			writeFileSync(configPath, JSON.stringify(config, null, "\t"), "utf-8");

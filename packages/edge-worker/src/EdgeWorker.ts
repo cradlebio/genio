@@ -358,7 +358,12 @@ export class EdgeWorker extends EventEmitter {
 
 		// Initialize repositories with path resolution
 		for (const repo of config.repositories) {
-			if (repo.isActive !== false) {
+			if (
+				repo.isActive !== false &&
+				repo.id &&
+				repo.repositoryPath &&
+				(repo.linearToken || this.config.platform === "cli")
+			) {
 				// Resolve paths that may contain tilde (~) prefix
 				const resolvedRepo: RepositoryConfig = {
 					...repo,
@@ -500,7 +505,7 @@ export class EdgeWorker extends EventEmitter {
 			import("cyrus-core").UserAccessControlConfig | undefined
 		>();
 		for (const repo of config.repositories) {
-			if (repo.isActive !== false) {
+			if (repo.isActive !== false && repo.id && repo.repositoryPath) {
 				repoAccessConfigs.set(repo.id, repo.userAccessControl);
 			}
 		}
@@ -544,7 +549,7 @@ export class EdgeWorker extends EventEmitter {
 		// Acquire M2M token before any Linear API calls
 		if (this.clientCredentialsTokenManager) {
 			const m2mToken = await this.clientCredentialsTokenManager.initialize();
-			this.propagateM2MToken(m2mToken);
+			await this.propagateM2MToken(m2mToken);
 			this.logger.info(
 				"🔑 M2M client credentials token acquired and applied to all repositories",
 			);
@@ -2355,8 +2360,17 @@ ${taskInstructions}
 	 */
 	private async addNewRepositories(repos: RepositoryConfig[]): Promise<void> {
 		for (const repo of repos) {
-			if (repo.isActive === false) {
-				this.logger.info(`⏭️  Skipping inactive repository: ${repo.name}`);
+			if (repo.isActive === false || !repo.id || !repo.repositoryPath) {
+				this.logger.info(
+					`⏭️  Skipping inactive or incomplete repository: ${repo.name ?? "(unknown)"}`,
+				);
+				continue;
+			}
+
+			if (!repo.linearToken && this.config.platform !== "cli") {
+				this.logger.warn(
+					`⏭️  Skipping repository without Linear token: ${repo.name ?? "(unknown)"} (run 'cyrus self-auth' to authenticate)`,
+				);
 				continue;
 			}
 
@@ -2393,9 +2407,28 @@ ${taskInstructions}
 								new LinearClient({
 									accessToken: repo.linearToken,
 								}),
-								this.buildOAuthConfig(resolvedRepo),
+								this.clientCredentialsTokenManager
+									? undefined
+									: this.buildOAuthConfig(resolvedRepo),
+								undefined,
+								this.clientCredentialsTokenManager
+									? () => this.clientCredentialsTokenManager!.refreshToken()
+									: undefined,
 							);
 				this.issueTrackers.set(repo.id, issueTracker);
+
+				// Propagate current M2M token to newly added repository
+				if (this.clientCredentialsTokenManager) {
+					try {
+						const currentToken = this.clientCredentialsTokenManager.getToken();
+						resolvedRepo.linearToken = currentToken;
+						(issueTracker as LinearIssueTrackerService).setAccessToken(
+							currentToken,
+						);
+					} catch {
+						// Token not yet available
+					}
+				}
 
 				// Create AgentSessionManager with same pattern as constructor
 				const activitySink = new LinearActivitySink(
@@ -6640,9 +6673,12 @@ ${input.userComment}
 	}
 
 	/**
-	 * Propagate M2M token to all repositories and their issue tracker services.
+	 * Propagate M2M token to all repositories and their issue tracker services,
+	 * then persist to config.json for each workspace.
 	 */
-	private propagateM2MToken(accessToken: string): void {
+	private async propagateM2MToken(accessToken: string): Promise<void> {
+		const workspacesUpdated = new Set<string>();
+
 		for (const [repoId, repo] of this.repositories) {
 			repo.linearToken = accessToken;
 			repo.linearRefreshToken = undefined;
@@ -6651,6 +6687,23 @@ ${input.userComment}
 			if (issueTracker) {
 				(issueTracker as LinearIssueTrackerService).setAccessToken(accessToken);
 			}
+
+			if (repo.linearWorkspaceId) {
+				workspacesUpdated.add(repo.linearWorkspaceId);
+			}
+		}
+
+		// Persist to config.json for each workspace
+		for (const workspaceId of workspacesUpdated) {
+			const repo = [...this.repositories.values()].find(
+				(r) => r.linearWorkspaceId === workspaceId,
+			);
+			await this.saveOAuthTokens({
+				linearToken: accessToken,
+				linearRefreshToken: undefined,
+				linearWorkspaceId: workspaceId,
+				linearWorkspaceName: repo?.linearWorkspaceName,
+			});
 		}
 	}
 

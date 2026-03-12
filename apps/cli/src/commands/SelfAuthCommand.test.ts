@@ -538,4 +538,147 @@ describe("SelfAuthCommand", () => {
 			expect(writtenConfig.repositories[1].linearToken).toBe("keep");
 		});
 	});
+
+	describe("M2M Authentication", () => {
+		beforeEach(async () => {
+			process.env.LINEAR_CLIENT_ID = "test-client-id";
+			process.env.LINEAR_CLIENT_SECRET = "test-secret";
+			process.env.CYRUS_USE_LINEAR_M2M_TOKEN = "true";
+			delete process.env.CYRUS_BASE_URL; // M2M doesn't need this
+
+			// Re-establish default LinearClient mock (may have been overridden by prior tests)
+			const { LinearClient } = await import("@linear/sdk");
+			(LinearClient as any).mockImplementation(() => ({
+				viewer: Promise.resolve({
+					organization: Promise.resolve({
+						id: "workspace-123",
+						name: "Test Workspace",
+					}),
+				}),
+			}));
+
+			mocks.mockReadFileSync.mockReturnValue(
+				JSON.stringify({
+					repositories: [
+						{
+							id: "repo-1",
+							name: "test-repo",
+							linearWorkspaceId: "",
+							linearToken: "",
+						},
+					],
+				}),
+			);
+		});
+
+		it("should acquire token via client_credentials grant", async () => {
+			mocks.mockFetch.mockResolvedValueOnce({
+				ok: true,
+				json: () =>
+					Promise.resolve({
+						access_token: "lin_api_m2m_token_123",
+						token_type: "Bearer",
+						expires_in: 864000,
+						scope: "write",
+					}),
+			});
+
+			await expect(command.execute([])).rejects.toThrow("process.exit called");
+			expect(mockExit).toHaveBeenCalledWith(0);
+
+			// Verify client_credentials grant
+			expect(mocks.mockFetch).toHaveBeenCalledWith(
+				"https://api.linear.app/oauth/token",
+				expect.objectContaining({
+					method: "POST",
+					headers: { "Content-Type": "application/x-www-form-urlencoded" },
+				}),
+			);
+
+			const tokenCall = mocks.mockFetch.mock.calls[0];
+			const body = tokenCall[1].body;
+			expect(body).toContain("grant_type=client_credentials");
+			expect(body).toContain("client_id=test-client-id");
+			expect(body).toContain("client_secret=test-secret");
+		});
+
+		it("should error when LINEAR_CLIENT_ID is missing in M2M mode", async () => {
+			delete process.env.LINEAR_CLIENT_ID;
+
+			await expect(command.execute([])).rejects.toThrow("process.exit called");
+			expect(mockExit).toHaveBeenCalledWith(1);
+			expect(mockConsoleLog).toHaveBeenCalledWith(
+				expect.stringContaining("LINEAR_CLIENT_ID"),
+			);
+		});
+
+		it("should error when LINEAR_CLIENT_SECRET is missing in M2M mode", async () => {
+			delete process.env.LINEAR_CLIENT_SECRET;
+
+			await expect(command.execute([])).rejects.toThrow("process.exit called");
+			expect(mockExit).toHaveBeenCalledWith(1);
+			expect(mockConsoleLog).toHaveBeenCalledWith(
+				expect.stringContaining("LINEAR_CLIENT_SECRET"),
+			);
+		});
+
+		it("should NOT require CYRUS_BASE_URL in M2M mode", async () => {
+			delete process.env.CYRUS_BASE_URL;
+
+			mocks.mockFetch.mockResolvedValueOnce({
+				ok: true,
+				json: () =>
+					Promise.resolve({
+						access_token: "lin_api_m2m_token",
+						token_type: "Bearer",
+						expires_in: 864000,
+						scope: "write",
+					}),
+			});
+
+			await expect(command.execute([])).rejects.toThrow("process.exit called");
+			expect(mockExit).toHaveBeenCalledWith(0);
+		});
+
+		it("should store workspace credentials in config", async () => {
+			mocks.mockFetch.mockResolvedValueOnce({
+				ok: true,
+				json: () =>
+					Promise.resolve({
+						access_token: "lin_api_m2m_token",
+						token_type: "Bearer",
+						expires_in: 864000,
+						scope: "write",
+					}),
+			});
+
+			await expect(command.execute([])).rejects.toThrow("process.exit called");
+			expect(mockExit).toHaveBeenCalledWith(0);
+
+			expect(mocks.mockWriteFileSync).toHaveBeenCalled();
+			const writtenConfig = JSON.parse(
+				mocks.mockWriteFileSync.mock.calls[0][1],
+			);
+			expect(writtenConfig.repositories[0].linearToken).toBe(
+				"lin_api_m2m_token",
+			);
+			expect(writtenConfig.repositories[0].linearWorkspaceId).toBe(
+				"workspace-123",
+			);
+			expect(writtenConfig.repositories[0].linearWorkspaceName).toBe(
+				"Test Workspace",
+			);
+		});
+
+		it("should error when token acquisition fails", async () => {
+			mocks.mockFetch.mockResolvedValueOnce({
+				ok: false,
+				status: 401,
+				text: () => Promise.resolve("Invalid credentials"),
+			});
+
+			await expect(command.execute([])).rejects.toThrow("process.exit called");
+			expect(mockExit).toHaveBeenCalledWith(1);
+		});
+	});
 });

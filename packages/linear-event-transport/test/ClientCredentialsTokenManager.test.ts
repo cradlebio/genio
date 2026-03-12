@@ -159,6 +159,31 @@ describe("ClientCredentialsTokenManager", () => {
 			manager.dispose();
 		});
 
+		it("should clamp renewal timeout to 2^31-1 ms for large expires_in", async () => {
+			const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+			const thirtyDaysInSeconds = 30 * 24 * 60 * 60; // 2,592,000s
+			vi.stubGlobal(
+				"fetch",
+				mockFetchSuccess({
+					...MOCK_TOKEN_RESPONSE,
+					expires_in: thirtyDaysInSeconds,
+				}),
+			);
+			const manager = new ClientCredentialsTokenManager(baseConfig);
+
+			await manager.initialize();
+
+			const MAX_TIMEOUT_MS = 2_147_483_647;
+			const scheduledCall = setTimeoutSpy.mock.calls.find(
+				([, ms]) => typeof ms === "number" && ms > 60_000,
+			);
+			expect(scheduledCall).toBeDefined();
+			expect(scheduledCall![1]).toBeLessThanOrEqual(MAX_TIMEOUT_MS);
+
+			manager.dispose();
+			setTimeoutSpy.mockRestore();
+		});
+
 		it("should retry with exponential backoff on renewal failure", async () => {
 			// Use short expiry so we can trigger renewal quickly
 			vi.stubGlobal(

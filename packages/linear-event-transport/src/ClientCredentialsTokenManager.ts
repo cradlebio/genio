@@ -164,7 +164,11 @@ export class ClientCredentialsTokenManager {
 			clearTimeout(this.renewalTimer);
 		}
 
-		const renewalMs = expiresInSeconds * RENEWAL_FACTOR * 1000;
+		const MAX_TIMEOUT_MS = 2_147_483_647; // 2^31 - 1, setTimeout max
+		const renewalMs = Math.min(
+			expiresInSeconds * RENEWAL_FACTOR * 1000,
+			MAX_TIMEOUT_MS,
+		);
 		this.logger.info(
 			`Scheduling token renewal in ${Math.round(renewalMs / 86400000)} days`,
 		);
