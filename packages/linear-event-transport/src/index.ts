@@ -1,4 +1,8 @@
 export type { LinearWebhookPayload } from "@linear/sdk/webhooks";
+export {
+	type ClientCredentialsConfig,
+	ClientCredentialsTokenManager,
+} from "./ClientCredentialsTokenManager.js";
 export { LinearEventTransport } from "./LinearEventTransport.js";
 export {
 	LinearIssueTrackerService,

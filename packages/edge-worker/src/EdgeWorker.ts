@@ -106,6 +106,7 @@ import {
 	stripMention as stripGitLabMention,
 } from "cyrus-gitlab-event-transport";
 import {
+	ClientCredentialsTokenManager,
 	LinearEventTransport,
 	LinearIssueTrackerService,
 	type LinearOAuthConfig,
@@ -223,6 +224,8 @@ export class EdgeWorker extends EventEmitter {
 	private cyrusToolsMcpRequestContext =
 		new AsyncLocalStorage<CyrusToolsMcpContext>();
 	private cyrusToolsMcpSessions = new Sessions<any>();
+	private clientCredentialsTokenManager: ClientCredentialsTokenManager | null =
+		null;
 
 	constructor(config: EdgeWorkerConfig) {
 		super();
@@ -333,6 +336,26 @@ export class EdgeWorker extends EventEmitter {
 			skipTunnel,
 		);
 
+		// Initialize M2M client credentials token manager if enabled
+		const useM2MToken =
+			process.env.CYRUS_USE_LINEAR_M2M_TOKEN?.toLowerCase() === "true";
+		if (useM2MToken && config.platform !== "cli") {
+			const clientId = process.env.LINEAR_CLIENT_ID;
+			const clientSecret = process.env.LINEAR_CLIENT_SECRET;
+			if (!clientId || !clientSecret) {
+				throw new Error(
+					"CYRUS_USE_LINEAR_M2M_TOKEN is set but LINEAR_CLIENT_ID and/or LINEAR_CLIENT_SECRET are missing",
+				);
+			}
+			this.clientCredentialsTokenManager = new ClientCredentialsTokenManager({
+				clientId,
+				clientSecret,
+				onTokenRefresh: (accessToken) => {
+					this.propagateM2MToken(accessToken);
+				},
+			});
+		}
+
 		// Initialize repositories with path resolution
 		for (const repo of config.repositories) {
 			if (repo.isActive !== false) {
@@ -365,7 +388,13 @@ export class EdgeWorker extends EventEmitter {
 								new LinearClient({
 									accessToken: repo.linearToken,
 								}),
-								this.buildOAuthConfig(resolvedRepo),
+								this.clientCredentialsTokenManager
+									? undefined
+									: this.buildOAuthConfig(resolvedRepo),
+								undefined, // logger
+								this.clientCredentialsTokenManager
+									? () => this.clientCredentialsTokenManager!.refreshToken()
+									: undefined,
 							);
 				this.issueTrackers.set(repo.id, issueTracker);
 
@@ -512,6 +541,15 @@ export class EdgeWorker extends EventEmitter {
 	 * Start the edge worker
 	 */
 	async start(): Promise<void> {
+		// Acquire M2M token before any Linear API calls
+		if (this.clientCredentialsTokenManager) {
+			const m2mToken = await this.clientCredentialsTokenManager.initialize();
+			this.propagateM2MToken(m2mToken);
+			this.logger.info(
+				"🔑 M2M client credentials token acquired and applied to all repositories",
+			);
+		}
+
 		// Load persisted state for each repository
 		await this.loadPersistedState();
 
@@ -2013,6 +2051,12 @@ ${taskInstructions}
 					this.logger.error("Error stopping Claude runner:", error);
 				}
 			}
+		}
+
+		// Dispose M2M token manager if active
+		if (this.clientCredentialsTokenManager) {
+			this.clientCredentialsTokenManager.dispose();
+			this.clientCredentialsTokenManager = null;
 		}
 
 		// Clear event transport (no explicit cleanup needed, routes are removed when server stops)
@@ -6593,6 +6637,21 @@ ${input.userComment}
 				});
 			},
 		};
+	}
+
+	/**
+	 * Propagate M2M token to all repositories and their issue tracker services.
+	 */
+	private propagateM2MToken(accessToken: string): void {
+		for (const [repoId, repo] of this.repositories) {
+			repo.linearToken = accessToken;
+			repo.linearRefreshToken = undefined;
+
+			const issueTracker = this.issueTrackers.get(repoId);
+			if (issueTracker) {
+				(issueTracker as LinearIssueTrackerService).setAccessToken(accessToken);
+			}
+		}
 	}
 
 	/**
