@@ -5521,7 +5521,11 @@ ${input.userComment}
 
 		// Auto-detect: if exactly one runner has API keys set, use it
 		const available: Array<RunnerType> = [];
-		if (process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY) {
+		if (
+			process.env.CLAUDE_CODE_OAUTH_TOKEN ||
+			process.env.ANTHROPIC_API_KEY ||
+			process.env.CLAUDE_CODE_USE_VERTEX
+		) {
 			available.push("claude");
 		}
 		if (process.env.GEMINI_API_KEY) {
