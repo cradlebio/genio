@@ -1,7 +1,7 @@
 import { createLogger, type ILogger } from "cyrus-core";
 
 const LINEAR_TOKEN_ENDPOINT = "https://api.linear.app/oauth/token";
-const DEFAULT_SCOPES = "write,app:assignable,app:mentionable";
+const DEFAULT_SCOPES = "read,write,app:assignable,app:mentionable";
 const RENEWAL_FACTOR = 0.9;
 const COOLDOWN_MS = 60_000;
 const MAX_RETRY_ATTEMPTS = 3;
